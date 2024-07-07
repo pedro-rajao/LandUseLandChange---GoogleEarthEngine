@@ -1,0 +1,122 @@
+// LULC Sentinel2A
+
+//function to generate classified images for a given year
+function generateClassifiedImageByYear(year) {
+  var startDate = year + '-01-01';
+  var endDate = year + '-12-31';
+  
+  // Load Sentinel-2 imagery for the given year
+  var data_sentinel2_year = ee.ImageCollection('COPERNICUS/S2')
+    .filterBounds(roi)
+    .filterDate(startDate, endDate)
+    .filterMetadata('CLOUDY_PIXEL_PERCENTAGE', 'less_than', 5)
+    .median();
+
+  var training_data = climax_inter_forest.merge(water)
+    .merge(urban)
+    .merge(early_inter_forest)
+    .merge(pasture)
+    .merge(rock);
+
+  var label = 'Class';
+  var bands = ['B2', 'B3', 'B4', 'B8'];
+  var input = data_sentinel2_year.select(bands);
+
+  // Function to reduce the region and handle missing values
+  function reduceFeature(feat) {
+    var props = feat.toDictionary();
+    var reduced = input.reduceRegion({
+      reducer: ee.Reducer.median(),
+      geometry: feat.geometry(),
+      scale: 10
+    });
+    return ee.Feature(null, props.combine(reduced)).set('random', ee.Number(Math.random()));
+  }
+
+  var training_image_data = training_data.map(reduceFeature);
+
+  var training_set = training_image_data.filter(ee.Filter.lessThan('random', 0.8));
+  var testing_set = training_image_data.filter(ee.Filter.greaterThanOrEquals('random', 0.8));
+
+  var classifier = ee.Classifier.smileRandomForest(100).train(training_set, label, bands);
+
+  // Classify the image using the trained classifier
+  var classifiedImage = data_sentinel2_year.classify(classifier);
+  return classifiedImage;
+}
+
+// Define the landcoverPalette
+var landcoverPalette = [
+  'af2a2a', //urban AndOr bare soil(0)
+  '006400', //climax_inter_forest(1)
+  '0000ff', //water(2)
+  'FFFFb2', //pasture(3)
+  'e974ed', //agriculture(4)
+  '00ff00', //early_inter_forest(5)
+  'D5D5E5', //rock(6)
+];
+
+// Loop through each year from 2016 to 2023
+for (var year = 2016; year <= 2023; year++) {
+  var classifiedImage = generateClassifiedImageByYear(year);
+  var classifiedImageWithPalette = classifiedImage.visualize({palette: landcoverPalette, min: 0, max: 6});
+  
+  // Calculate NDVI for the given year
+  var startDate = year + '-01-01';
+  var endDate = year + '-12-31';
+  var sentinel2Image = ee.ImageCollection('COPERNICUS/S2')
+    .filterBounds(roi)
+    .filterDate(startDate, endDate)
+    .filterMetadata('CLOUDY_PIXEL_PERCENTAGE', 'less_than', 5)
+    .median();
+    
+  var ndvi = sentinel2Image.normalizedDifference(['B8', 'B4']); // NIR - RED
+  
+  // Display the classified image on the map
+  Map.addLayer(classifiedImageWithPalette.clip(PAF_propriedades), {}, 'classificationRandomForest ' + year, false);
+  
+  // Display the NDVI image on the map
+  Map.addLayer(ndvi.clip(PAF_propriedades), {min: -1, max: 1, palette: ['blue', 'white', 'green']}, 'NDVI ' + year, false);
+  
+  // Load Sentinel-2 imagery for visualization
+  Map.addLayer(sentinel2Image.clip(roi), {bands: ['B4', 'B3', 'B2'], min: 0, max: 3000}, 'Sentinel-2 ' + year, false);
+  Map.centerObject(PAF_propriedades);
+  
+
+  // Export the classified image to an Asset
+  var assetName = 'classifiedImage_' + year;
+  Export.image.toAsset({
+    image: classifiedImage,
+    description: assetName,
+    assetId: 'users/yourUsername/' + assetName,
+    scale: 10, // Adjust the scale as needed
+    region: PAF_propriedades.geometry(),
+  });
+  
+    // Export the NDVI image to an Asset
+  var ndviAssetName = 'NDVI_' + year;
+  Export.image.toAsset({
+    image: ndvi,
+    description: ndviAssetName,
+    assetId: 'users/yourUsername/' + ndviAssetName,
+    scale: 10, // Adjust the scale as needed
+    region: roi,
+  });
+}
+
+
+var style1 = {
+  color: 'black',       // cor do contorno como vermelho
+  fillColor: '#00000000',  // cor de preenchimento como transparente
+  width: 1.5            // largura do contorno
+};
+var styledLayer1 = PAF_propriedades.style(style1);
+
+var style2 = {
+  color: 'red',       // cor do contorno como vermelho
+  fillColor: '#00000000',  // cor de preenchimento como transparente
+  width: 0.8           // largura do contorno
+};
+var styledLayer2 = PAF_2023.style(style2);
+Map.addLayer(styledLayer1, {}, 'PAF_propriedades', false);
+  Map.addLayer(styledLayer2, {}, 'PAF_2023', false);
