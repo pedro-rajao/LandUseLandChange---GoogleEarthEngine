@@ -1,0 +1,102 @@
+
+
+///// Asset mapbiomas
+var asset = "projects/mapbiomas-workspace/public/collection8/mapbiomas_collection80_integration_v1";
+// LULC mapbiomas image
+var mapbiomas = ee.Image(asset);
+var palette = ["ffffff","129912","1f4423","006400","00ff00","687537",
+"76a5af","29eee4","77a605","ad4413","bbfcac","45c2a5","b8af4f",
+"f1c232","ffffb2","ffd966","f6b26b","f99f40","e974ed","d5a6bd",
+"c27ba0","fff3bf","ea9999","dd7e6b","aa0000","ff8585","0000ff",
+"d5d5e5","dd497f","665a3a","ff0000","1f0478","968c46","0000ff",
+"4fd3ff","ba6a27","f3b4f1","02106f","02106f","e075ad","982c9e",
+"e787f8","ebebe0","c2c2a3","6b6b47","d0ffd0","cca0d4","d082de",
+"cd49e4","6b9932","66ffcc","000000","000000","000000","000000",
+"000000","000000","cc66ff","ff6666","006400","8d9e8b","84ff75","faf87d"];
+
+///// Asset of regions for which you want to calculate statistics
+var assetTerritories = "projects/ee-pedrorajao/assets/aprf_2021_rh_ii"
+                        //projects/ee-pedrorajao/assets/limites_paf_2020";
+                        //projects/ee-pedrorajao/assets/conservacao_paf_2020
+                        //projects/ee-pedrorajao/assets/restauracao_2023_PAF
+                        //projects/ee-pedrorajao/assets/area_restaurada_paf_2020
+                        
+// Territory
+var territory1 = ee.FeatureCollection(assetTerritories);
+
+var WGS84 = ee.Projection('EPSG:4326');
+
+var territory = territory1.map(function(feature) {
+  return feature.transform(WGS84);
+});
+
+// Change the scale if you need.
+var scale = 30;
+
+// Define a list of years to export
+var years = [
+    '1985', '1986', '1987', '1988', '1989', '1990', '1991', '1992',
+    '1993', '1994', '1995', '1996', '1997', '1998', '1999', '2000',
+    '2001', '2002', '2003', '2004', '2005', '2006', '2007', '2008',
+    '2009', '2010', '2011', '2012', '2013', '2014', '2015', '2016',
+    '2017', '2018', '2019', '2020', '2021', '2022'
+];
+
+var classIds = ee.List.sequence(1, 62)
+
+
+var calculateClassAreaByYear = function(year) {
+  var image = mapbiomas.select('classification_' + year);
+  var districtAreas = territory.map(function(feature) {
+    
+    var areas = ee.Image.pixelArea().addBands(image)
+      .reduceRegion({
+        reducer: ee.Reducer.sum().group({
+        groupField: 1,
+        groupName: 'class',
+      }),
+      geometry: feature.geometry(),
+      scale: 30,
+      maxPixels: 1e10
+      })
+    var classAreas = ee.List(areas.get('groups'))
+  
+    var classAreaLists = classAreas.map(function(item) {
+      var areaDict = ee.Dictionary(item)
+      var classNumber = ee.Number(areaDict.get('class')).format()
+      var area = ee.Number(areaDict.get('sum')).divide(1e4)//.round()
+      return ee.List([classNumber, area])
+    })
+    var result = ee.Dictionary(classAreaLists.flatten())
+  
+    var classe = feature.get('classe') // restauração: COD_PROP_P ; conservação: COD_PROP
+        return ee.Feature(feature.geometry(),
+              result.set('classe', classe)
+                      .set('year', year)
+        
+        )
+  })
+  return districtAreas
+  print(districtAreas)
+}
+
+var results = years.map(calculateClassAreaByYear)
+
+var districtAreasByYear = ee.FeatureCollection(results).flatten()
+
+var outputFields = ee.List(['classe', 'year' ]).cat(classIds).getInfo()
+
+print(outputFields)
+
+// Export the results as a CSV file
+
+Export.table.toDrive({
+    collection: districtAreasByYear,
+    description: 'class_area_by_district_by_year',
+    folder: 'earthengine',
+    fileNamePrefix: 'class_area_by_district_by_year',
+    fileFormat: 'CSV',
+    selectors: outputFields
+    })
+
+
