@@ -1,0 +1,74 @@
+// Carregar a coleção Sentinel-2 para o ano de 2020.
+var sentinel2 = ee.ImageCollection('COPERNICUS/S2')
+  .filterBounds(macico_pedraBranca)
+  .filterDate('2020-01-01', '2020-12-31')
+  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 10));
+
+// Função para calcular índices de vegetação (NDVI) em uma imagem Sentinel-2.
+function calculateNDVI(image) {
+  var ndvi = image.normalizedDifference(['B8', 'B4']).rename('NDVI');
+  return image.addBands(ndvi);
+}
+
+var sentinel2_with_ndvi = sentinel2.map(calculateNDVI);
+
+// Calcular a mediana de NDVI na coleção.
+var medianNDVI = sentinel2_with_ndvi
+  .map(function(image) {
+    return image.toFloat();
+  })
+  .select('NDVI')
+  .median();
+
+// Calcular o LAI com base na fórmula recomendada.
+var laiImage = medianNDVI.expression(
+  '-0.5 * log(0.2 / (1 - NDVI))',
+  {
+    NDVI: medianNDVI
+  }
+).rename('LAI');
+
+laiImage = laiImage.toFloat();
+
+// Exportar a imagem com a banda LAI e todas as outras bandas.
+Export.image.toDrive({
+  image: laiImage,
+  description: 'Sentinel2_LAI_Median_2020',
+  scale: 10,
+  region: macico_pedraBranca,
+  maxPixels: 1e13,
+});
+
+// Função para calcular o LAI com base nos valores de NDVI usando a fórmula recomendada.
+function calculateLAIForPoint(feature) {
+  var point = ee.Geometry.Point(feature.geometry().coordinates());
+
+  var ndvi_value = ee.Number(medianNDVI.reduceRegion({
+    reducer: ee.Reducer.first(),
+    geometry: point,
+    scale: 10,
+    bestEffort: true
+  }).get('NDVI'));
+
+  var lai_value = ee.Number(-0.5 * Math.log(0.2 / (1 - ndvi_value)));
+
+  feature = feature.set({
+    'Name': feature.get('Name'),
+    'NDVI': ndvi_value,
+    'LAI': lai_value
+  });
+
+  return feature;
+}
+
+var points_with_lai = doutorado_pts.map(calculateLAIForPoint);
+
+// Exportar os resultados para um arquivo CSV no Google Drive.
+Export.table.toDrive({
+  collection: points_with_lai,
+  description: 'LAI_Points_Doutorado_final_2021_c',
+  fileFormat: 'CSV',
+  selectors: ['Name', 'NDVI', 'LAI'],
+  fileNamePrefix: 'LAI_Points',
+});
+
